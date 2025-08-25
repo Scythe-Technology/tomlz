@@ -145,30 +145,31 @@ fn expectParseEqualToJson(src: []const u8, json: []const u8) !void {
     var table = try parser.parse(testing.allocator, src);
     defer table.deinit(testing.allocator);
 
-    var actual_al = std.ArrayList(u8).init(testing.allocator);
+    var actual_al: std.Io.Writer.Allocating = .init(testing.allocator);
     defer actual_al.deinit();
 
-    var json_writer = std.json.writeStreamArbitraryDepth(
-        testing.allocator,
-        actual_al.writer(),
-        .{ .whitespace = .indent_4 },
-    );
-    defer json_writer.deinit();
+    const writer = &actual_al.writer;
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    var actual_json = try tableToJson(arena.allocator(), &table);
-    try actual_json.jsonStringify(&json_writer);
+    const actual_json = try tableToJson(arena.allocator(), &table);
+    try std.json.Stringify.value(actual_json, .{ .whitespace = .indent_4 }, writer);
+    try writer.flush();
 
-    try testing.expectEqualStrings(json, actual_al.items);
+    try testing.expectEqualStrings(json, actual_al.written());
 }
 
 fn testFile(dir: *const std.fs.Dir, basename: []const u8) !parser.Table {
     var f = try dir.openFile(basename, .{});
     defer f.close();
 
-    const contents = try f.reader().readAllAlloc(testing.allocator, 5 * 1024 * 1024);
+    var buffer: [1024]u8 = undefined;
+    var file_reader = f.reader(&buffer);
+
+    const reader = &file_reader.interface;
+
+    const contents = try reader.allocRemaining(testing.allocator, .limited(5 * 1024 * 1024));
     defer testing.allocator.free(contents);
 
     return try parser.parse(testing.allocator, contents);
@@ -199,7 +200,7 @@ fn testValid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !bo
     };
     defer tbl.deinit(testing.allocator);
 
-    var value = .{ .table = tbl };
+    var value: parser.Value = .{ .table = tbl };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var actual = try tomlValueToJson(arena.allocator(), &value);
@@ -211,7 +212,12 @@ fn testValid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !bo
     var f = try dir.openFile(json_path, .{});
     defer f.close();
 
-    const contents = try f.reader().readAllAlloc(testing.allocator, 5 * 1024 * 1024);
+    var buffer: [1024]u8 = undefined;
+    var file_reader = f.reader(&buffer);
+
+    const reader = &file_reader.interface;
+
+    const contents = try reader.allocRemaining(testing.allocator, .limited(5 * 1024 * 1024));
     defer testing.allocator.free(contents);
 
     var expected = try std.json.parseFromSlice(std.json.Value, testing.allocator, contents, .{});
@@ -279,7 +285,12 @@ test "fuzz" {
         var f = try entry.dir.openFile(full_path, .{});
         defer f.close();
 
-        const contents = try f.reader().readAllAlloc(testing.allocator, 5 * 1024 * 1024);
+        var buffer: [1024]u8 = undefined;
+        var file_reader = f.reader(&buffer);
+
+        const reader = &file_reader.interface;
+
+        const contents = try reader.allocRemaining(testing.allocator, .limited(5 * 1024 * 1024));
         defer testing.allocator.free(contents);
 
         // We just want to make sure we don't crash when parsing these

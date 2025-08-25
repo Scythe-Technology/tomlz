@@ -306,7 +306,7 @@ fn unwrapOptionals(comptime T: anytype) std.builtin.Type {
     var ti = @typeInfo(T);
     inline while (true) {
         switch (ti) {
-            .Optional => |o| ti = @typeInfo(o.child),
+            .optional => |o| ti = @typeInfo(o.child),
             else => return ti,
         }
     }
@@ -317,20 +317,20 @@ fn decodeValue(comptime T: type, gpa: std.mem.Allocator, v: Value) DecodingError
     const opts_unwrapped_ti = unwrapOptionals(T);
     switch (v) {
         .integer => |i| {
-            if (opts_unwrapped_ti != .Int) return DecodingError.MismatchedType;
+            if (opts_unwrapped_ti != .int) return DecodingError.MismatchedType;
             return @intCast(i);
         },
         .float => |fl| {
-            if (opts_unwrapped_ti != .Float) return DecodingError.MismatchedType;
+            if (opts_unwrapped_ti != .float) return DecodingError.MismatchedType;
             return @floatCast(fl);
         },
         .boolean => |b| {
-            if (opts_unwrapped_ti != .Bool) return DecodingError.MismatchedType;
+            if (opts_unwrapped_ti != .@"bool") return DecodingError.MismatchedType;
             return b;
         },
         .string => |s| {
-            if (ti != .Pointer or ti.Pointer.child != u8 or
-                (ti.Pointer.size != .Slice and ti.Pointer.Size != .Many))
+            if (ti != .pointer or ti.pointer.child != u8 or
+                (ti.pointer.size != .slice and ti.pointer.Size != .many))
             {
                 return DecodingError.MismatchedType;
             }
@@ -338,16 +338,16 @@ fn decodeValue(comptime T: type, gpa: std.mem.Allocator, v: Value) DecodingError
             return try gpa.dupe(u8, s);
         },
         .array => |a| {
-            if (ti != .Pointer or (ti.Pointer.size != .Slice and ti.Pointer.size != .Many))
+            if (ti != .pointer or (ti.pointer.size != .slice and ti.pointer.size != .many))
                 return DecodingError.MismatchedType;
 
-            var al = try std.ArrayList(ti.Pointer.child).initCapacity(gpa, a.items().len);
-            errdefer al.deinit();
+            var al: std.ArrayList(ti.pointer.child) = try .initCapacity(gpa, a.items().len);
+            errdefer al.deinit(gpa);
             for (a.items()) |array_val| {
-                al.appendAssumeCapacity(try decodeValue(ti.Pointer.child, gpa, array_val));
+                al.appendAssumeCapacity(try decodeValue(ti.pointer.child, gpa, array_val));
             }
 
-            return al.toOwnedSlice();
+            return al.toOwnedSlice(gpa);
         },
         .table => |t| {
             return try decodeTable(T, gpa, t);
@@ -357,16 +357,16 @@ fn decodeValue(comptime T: type, gpa: std.mem.Allocator, v: Value) DecodingError
 
 fn decodeTable(comptime T: anytype, gpa: std.mem.Allocator, table: Table) DecodingError!T {
     const ti = @typeInfo(T);
-    if (ti != .Struct) return DecodingError.MismatchedType;
+    if (ti != .@"struct") return DecodingError.MismatchedType;
 
     var strct: T = undefined;
 
-    inline for (ti.Struct.fields) |f| {
+    inline for (ti.@"struct".fields) |f| {
         const f_ti = @typeInfo(f.type);
         if (!table.contains(f.name)) {
-            if (f_ti == .Optional)
+            if (f_ti == .optional)
                 @field(strct, f.name) = null
-            else if (f.default_value) |default_ptr| {
+            else if (f.default_value_ptr) |default_ptr| {
                 const default = @as(*align(1) const f.type, @ptrCast(default_ptr)).*;
                 @field(strct, f.name) = default;
             } else return DecodingError.MissingField;
@@ -381,7 +381,7 @@ fn decodeTable(comptime T: anytype, gpa: std.mem.Allocator, table: Table) Decodi
 
 pub fn decode(comptime T: anytype, gpa: std.mem.Allocator, src: []const u8) DecodingError!T {
     const ti = @typeInfo(T);
-    if (ti != .Struct) @compileError("argument T of decode must be a struct");
+    if (ti != .@"struct") @compileError("argument T of decode must be a struct");
 
     var tbl = try parse(gpa, src);
     defer tbl.deinit(gpa);
@@ -441,7 +441,7 @@ pub const Parser = struct {
         const dup: []const u8 = try self.allocator.dupe(u8, key);
         {
             errdefer self.allocator.free(dup);
-            try al.append(dup);
+            try al.append(self.allocator, dup);
         }
 
         var prev_loc = loc;
@@ -479,7 +479,7 @@ pub const Parser = struct {
             const new_dup = try self.allocator.dupe(u8, key_s);
             {
                 errdefer self.allocator.free(new_dup);
-                try al.append(new_dup);
+                try al.append(self.allocator, new_dup);
             }
         }
     }
@@ -703,10 +703,10 @@ pub const Parser = struct {
 
     /// parseAssignment parses a key/value assignment to `key`, followed by either a newline or EOF
     fn parseAssignment(self: *Parser, loc: lex.Loc, key: []const u8) !void {
-        var al = std.ArrayList([]const u8).init(self.allocator);
+        var al : std.ArrayList([]const u8) = .empty;
         defer {
             for (al.items) |s| self.allocator.free(s);
-            al.deinit();
+            al.deinit(self.allocator);
         }
 
         const new_loc = try self.parseKey(key, loc, &al);
@@ -772,10 +772,10 @@ pub const Parser = struct {
             },
         };
 
-        var al = std.ArrayList([]const u8).init(self.allocator);
+        var al: std.ArrayList([]const u8) = .empty;
         defer {
             for (al.items) |s| self.allocator.free(s);
-            al.deinit();
+            al.deinit(self.allocator);
         }
 
         const new_loc = try self.parseKey(key, tokloc.loc, &al);
@@ -797,10 +797,10 @@ pub const Parser = struct {
         table: *Table,
         key: []const u8,
     } {
-        var al = std.ArrayList([]const u8).init(self.allocator);
+        var al: std.ArrayList([]const u8) = .empty;
         defer {
             for (al.items) |s| self.allocator.free(s);
-            al.deinit();
+            al.deinit(self.allocator);
         }
 
         const new_loc = try self.parseKey(key, loc, &al);
