@@ -129,16 +129,16 @@ pub fn tomlValueToJson(allocator: std.mem.Allocator, v: *parser.Value) !std.json
 }
 
 pub fn tableToJson(allocator: std.mem.Allocator, table: *parser.Table) error{OutOfMemory}!std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    errdefer obj.deinit();
+    var obj: std.json.ObjectMap = try .init(allocator, &.{}, &.{});
+    errdefer obj.deinit(allocator);
 
     var it = table.table.iterator();
     while (it.next()) |entry| {
         const v = try tomlValueToJson(allocator, entry.value_ptr);
-        try obj.put(entry.key_ptr.*, v);
+        try obj.put(allocator, entry.key_ptr.*, v);
     }
 
-    return std.json.Value{ .object = obj };
+    return .{ .object = obj };
 }
 
 fn expectParseEqualToJson(src: []const u8, json: []const u8) !void {
@@ -160,12 +160,12 @@ fn expectParseEqualToJson(src: []const u8, json: []const u8) !void {
     try testing.expectEqualStrings(json, actual_al.written());
 }
 
-fn testFile(dir: *const std.fs.Dir, basename: []const u8) !parser.Table {
-    var f = try dir.openFile(basename, .{});
-    defer f.close();
+fn testFile(dir: *const std.Io.Dir, basename: []const u8) !parser.Table {
+    var f = try dir.openFile(testing.io, basename, .{});
+    defer f.close(testing.io);
 
     var buffer: [1024]u8 = undefined;
-    var file_reader = f.reader(&buffer);
+    var file_reader = f.reader(testing.io, &buffer);
 
     const reader = &file_reader.interface;
 
@@ -175,11 +175,12 @@ fn testFile(dir: *const std.fs.Dir, basename: []const u8) !parser.Table {
     return try parser.parse(testing.allocator, contents);
 }
 
-fn testInvalid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !bool {
+fn testInvalid(dir: *const std.Io.Dir, path: []const u8, basename: []const u8) !bool {
     for (failing_invalid_tests) |skip_path| if (std.mem.eql(u8, path, skip_path)) return false;
 
-    const full_path = try dir.realpathAlloc(testing.allocator, basename);
-    defer testing.allocator.free(full_path);
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try dir.realPathFile(testing.io, basename, &path_buf);
+    const full_path = path_buf[0..len];
 
     var tbl = testFile(dir, basename) catch return false;
     defer tbl.deinit(testing.allocator);
@@ -188,11 +189,12 @@ fn testInvalid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !
     return true;
 }
 
-fn testValid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !bool {
+fn testValid(dir: *const std.Io.Dir, path: []const u8, basename: []const u8) !bool {
     for (failing_valid_tests) |skip_path| if (std.mem.eql(u8, path, skip_path)) return false;
 
-    const full_path = try dir.realpathAlloc(testing.allocator, basename);
-    defer testing.allocator.free(full_path);
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const len = try dir.realPathFile(testing.io, basename, &path_buf);
+    const full_path = path_buf[0..len];
 
     var tbl = testFile(dir, basename) catch |err| {
         std.debug.print("{s} failed to parse {}\n", .{ full_path, err });
@@ -209,11 +211,11 @@ fn testValid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !bo
     defer testing.allocator.free(json_path);
     std.mem.copyForwards(u8, json_path[basename.len - 4 ..], "json");
 
-    var f = try dir.openFile(json_path, .{});
-    defer f.close();
+    var f = try dir.openFile(testing.io, json_path, .{});
+    defer f.close(testing.io);
 
     var buffer: [1024]u8 = undefined;
-    var file_reader = f.reader(&buffer);
+    var file_reader = f.reader(testing.io, &buffer);
 
     const reader = &file_reader.interface;
 
@@ -234,14 +236,14 @@ fn testValid(dir: *const std.fs.Dir, path: []const u8, basename: []const u8) !bo
 // standard tests
 
 test "invalid" {
-    var dir = try std.fs.cwd().makeOpenPath("tests/invalid", .{.iterate = true});
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, "tests/invalid", .{ .iterate = true });
+    defer dir.close(testing.io);
 
     var fail = false;
 
     var walker = try dir.walk(testing.allocator);
     defer walker.deinit();
-    while (try walker.next()) |entry| {
+    while (try walker.next(testing.io)) |entry| {
         if (entry.kind != .file) continue;
 
         fail = fail or try testInvalid(&entry.dir, entry.path, entry.basename);
@@ -251,14 +253,14 @@ test "invalid" {
 }
 
 test "valid" {
-    var dir = try std.fs.cwd().makeOpenPath("tests/valid", .{.iterate = true});
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, "tests/valid", .{ .iterate = true });
+    defer dir.close(testing.io);
 
     var fail = false;
 
     var walker = try dir.walk(testing.allocator);
     defer walker.deinit();
-    while (try walker.next()) |entry| {
+    while (try walker.next(testing.io)) |entry| {
         if (entry.kind != .file) continue;
         if (std.mem.endsWith(u8, entry.basename, "json")) continue;
 
@@ -271,23 +273,23 @@ test "valid" {
 // fuzz error case tests
 
 test "fuzz" {
-    var dir = try std.fs.cwd().makeOpenPath("tests/fuzzing", .{.iterate = true});
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, "tests/fuzzing", .{ .iterate = true });
+    defer dir.close(testing.io);
 
     var walker = try dir.walk(testing.allocator);
     defer walker.deinit();
-    while (try walker.next()) |entry| {
+    while (try walker.next(testing.io)) |entry| {
         if (entry.kind != .file) continue;
 
-        const full_path = try entry.dir.realpathAlloc(testing.allocator, entry.basename);
-        defer testing.allocator.free(full_path);
+        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const len = try entry.dir.realPathFile(testing.io, entry.basename, &path_buf);
+        const full_path = path_buf[0..len];
 
-        var f = try entry.dir.openFile(full_path, .{});
-        defer f.close();
+        var f = try entry.dir.openFile(testing.io, full_path, .{});
+        defer f.close(testing.io);
 
-        var buffer: [1024]u8 = undefined;
-        var file_reader = f.reader(&buffer);
-
+        var buffer: [8192]u8 = undefined;
+        var file_reader = f.reader(testing.io, &buffer);
         const reader = &file_reader.interface;
 
         const contents = try reader.allocRemaining(testing.allocator, .limited(5 * 1024 * 1024));

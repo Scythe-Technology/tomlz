@@ -234,7 +234,7 @@ pub fn WriteStream(
                 .comptime_int,
                 .float,
                 .comptime_float,
-                .@"bool",
+                .bool,
                 .@"enum",
                 .enum_literal,
                 .error_set,
@@ -315,7 +315,7 @@ pub fn WriteStream(
                     const array: [info.len]info.child = value;
                     return self.write(&array);
                 },
-                .@"void" => {},
+                .void => {},
                 else => @compileError("Unable to serialize type '" ++ @typeName(T) ++ "'."),
             };
         }
@@ -341,7 +341,7 @@ pub fn WriteStream(
                 },
                 .comptime_int => return self.writeInline(@as(std.math.IntFittingRange(value, value), value)),
                 .comptime_float => return self.out_stream.print("{e}", .{value}),
-                .@"bool" => return self.out_stream.print("{}", .{value}),
+                .bool => return self.out_stream.print("{}", .{value}),
                 .@"enum", .enum_literal => {
                     return self.out_stream.print("\"{s}\"", .{@tagName(value)});
                 },
@@ -644,7 +644,7 @@ test "encode basic types" {
     try testWriteStream(SomeError.TerriblyWrong, "value", "value = \"TerriblyWrong\"\n");
 
     // pointers
-    try testWriteStream(&&5, "value", "value = 5\n");
+    try testWriteStream(&&@as(u32, 5), "value", "value = 5\n");
 
     // optionals
     try testWriteStream(@as(?u16, 42), "value", "value = 42\n");

@@ -191,10 +191,10 @@ pub const Table = struct {
 };
 
 pub const Array = struct {
-    array: Base = .{},
+    array: Base = .empty,
     source: Source,
 
-    const Base = std.ArrayListUnmanaged(Value);
+    const Base = std.ArrayList(Value);
     const Source = enum { @"inline", header };
 
     pub fn items(self: *const Array) []const Value {
@@ -325,7 +325,7 @@ fn decodeValue(comptime T: type, gpa: std.mem.Allocator, v: Value) DecodingError
             return @floatCast(fl);
         },
         .boolean => |b| {
-            if (opts_unwrapped_ti != .@"bool") return DecodingError.MismatchedType;
+            if (opts_unwrapped_ti != .bool) return DecodingError.MismatchedType;
             return b;
         },
         .string => |s| {
@@ -513,7 +513,7 @@ pub const Parser = struct {
 
     /// parseInlineArray parses a value of the form "[ <value-1>, <value-2>, ...]"
     fn parseInlineArray(self: *Parser) !Value {
-        var al = std.ArrayListUnmanaged(Value){};
+        var al: std.ArrayList(Value) = .empty;
         errdefer {
             for (al.items) |*item| {
                 item.deinit(self.allocator);
@@ -703,7 +703,7 @@ pub const Parser = struct {
 
     /// parseAssignment parses a key/value assignment to `key`, followed by either a newline or EOF
     fn parseAssignment(self: *Parser, loc: lex.Loc, key: []const u8) !void {
-        var al : std.ArrayList([]const u8) = .empty;
+        var al: std.ArrayList([]const u8) = .empty;
         defer {
             for (al.items) |s| self.allocator.free(s);
             al.deinit(self.allocator);
@@ -954,7 +954,7 @@ fn kvsToTable(kvs: []const KV) AllocError!Table {
 fn toksToLocToks(toks: []const lex.Tok) AllocError![]lex.TokLoc {
     const loc = lex.Loc{ .line = 1, .col = 1 };
 
-    var al = std.ArrayListUnmanaged(lex.TokLoc){};
+    var al: std.ArrayList(lex.TokLoc) = .empty;
     for (toks) |tok| {
         try al.append(testing.allocator, .{ .tok = tok, .loc = loc });
     }
